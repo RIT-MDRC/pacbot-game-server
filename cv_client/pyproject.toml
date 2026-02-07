@@ -1,0 +1,7 @@
+[project]
+name = "cv-client"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["websockets==11.0.3", "opencv-python", "matplotlib"]

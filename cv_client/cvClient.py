@@ -1,13 +1,14 @@
 # JSON (for reading config.json)
 import json
-
 # Asyncio (for concurrency)
 import asyncio
+import threading
+import time
 
 # Websockets (for communication with the server)
-from websockets.sync.client import connect, ClientConnection # type: ignore
-from websockets.exceptions import ConnectionClosedError # type: ignore
-from websockets.typing import Data # type: ignore
+from websockets.client import connect, WebSocketClientProtocol
+from websockets.exceptions import ConnectionClosed
+from websockets.typing import Data
 
 # Decision module
 from cameraModule import CameraModule
@@ -21,6 +22,12 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 # Terminal colors for formatting output text
 from terminalColors import *
+
+# GUI
+import gui
+
+# OpenCV
+import cv2
 
 # Get the connect URL from the config.json file
 def getConnectURL() -> str:
@@ -38,7 +45,7 @@ class CvClient:
 	Pacbot game server, using asyncio.
 	'''
 
-	def __init__(self, connectURL: str) -> None:
+	def __init__(self, connectURL: str, cameraIDs: list[int]) -> None:
 		'''
 		Construct a new Pacbot client object
 		'''
@@ -50,18 +57,26 @@ class CvClient:
 		self._socketOpen: bool = False
 
 		# Connection object to communicate with the server
-		self.connection: ClientConnection
+		self.connection: WebSocketClientProtocol
+
+		# Event loop
+		self.loop: asyncio.AbstractEventLoop
 
 		# Game state object to store the game information
 		self.state: ConnectionState = ConnectionState()
 
 		# Decision module (policy) to make high-level decisions
-		self.cameraModule: CameraModule = CameraModule(self.state)
+		self.cameraModules = [CameraModule(self.state) for _ in cameraIDs]
+		for i, module in enumerate(self.cameraModules):
+			module.setCameraID(cameraIDs[i])
 
 	async def run(self) -> None:
 		'''
 		Connect to the server, then run
 		'''
+
+		# Get the current event loop
+		self.loop = asyncio.get_running_loop()
 
 		# Connect to the websocket server
 		await self.connect()
@@ -69,8 +84,10 @@ class CvClient:
 		try: # Try receiving messages indefinitely
 			if self._socketOpen:
 				await asyncio.gather(
+					self.sendLoop(),
 					self.receiveLoop(),
-					self.cameraModule.decisionLoop()
+					self.displayLoop(),
+					*[module.decisionLoop() for module in self.cameraModules]
 				)
 		finally: # Disconnect once the connection is over
 			await self.disconnect()
@@ -82,7 +99,7 @@ class CvClient:
 
 		# Connect to the specified URL
 		try:
-			self.connection = connect(self.connectURL)
+			self.connection = await connect(self.connectURL)
 			self._socketOpen = True
 			self.state.setConnectionStatus(True)
 
@@ -102,9 +119,13 @@ class CvClient:
 
 		# Close the connection
 		if self._socketOpen:
-			self.connection.close()
+			await self.connection.close()
 		self._socketOpen = False
 		self.state.setConnectionStatus(False)
+
+		for module in self.cameraModules:
+			if module.cap is not None:
+				module.cap.release()
 
 	# Return whether the connection is open
 	def isOpen(self) -> bool:
@@ -113,40 +134,74 @@ class CvClient:
 		'''
 		return self._socketOpen
 
+	async def sendLoop(self) -> None:
+		'''
+		Loop for sending messages to the server
+		'''
+		while self.isOpen():
+			try:
+				if self.state.writeServerBuf:
+					response: bytes = self.state.writeServerBuf.popleft()
+					await self.connection.send(response)
+				await asyncio.sleep(0.01)
+			except ConnectionClosed:
+				break
+
 	async def receiveLoop(self) -> None:
 		'''
 		Receive loop for capturing messages from the server
 		'''
+		try:
+			async for _ in self.connection:
+				pass
+		except ConnectionClosed:
+			print('Connection lost...')
+			self.state.setConnectionStatus(False)
 
-		# Receive values as long as the connection is open
+	def _displayWorker(self) -> None:
+		'''
+		Worker thread for displaying the camera feed
+		'''
+		# Format windows
+		for i in range(len(self.cameraModules)):
+			cv2.namedWindow(f"Camera {i}", cv2.WINDOW_NORMAL)
+			cv2.resizeWindow(f"Camera {i}", 400, 300)
+
 		while self.isOpen():
+			for i, module in enumerate(self.cameraModules):
+				if module.latest_frame is not None:
+					cv2.imshow(f"Camera {i}", module.latest_frame)
 
-			# Try to receive messages (and skip to except in case of an error)
-			try:
-
-				# Receive a message from the connection (unused)
-				_: Data = self.connection.recv()
-
-				# Write a response back to the server if necessary
-				if self.state.writeServerBuf:
-					response: bytes = self.state.writeServerBuf.popleft()
-					self.connection.send(response)
-
-				# Free the event loop to allow another decision
-				await asyncio.sleep(0)
-
-			# Break once the connection is closed
-			except ConnectionClosedError:
-				print('Connection lost...')
-				self.state.setConnectionStatus(False)
+			if cv2.waitKey(1) & 0xFF == ord('q'):
+				asyncio.run_coroutine_threadsafe(self.disconnect(), self.loop)
 				break
 
-# Main function
+			time.sleep(0.01)
+
+		cv2.destroyAllWindows()
+
+	async def displayLoop(self) -> None:
+		'''
+		Loop for displaying the camera feed
+		'''
+		display_thread = threading.Thread(target=self._displayWorker, daemon=True)
+		display_thread.start()
+
+		while self.isOpen():
+			await asyncio.sleep(0.1)
+
 async def main():
 
 	# Get the URL to connect to
 	connectURL = getConnectURL()
-	client = CvClient(connectURL)
+
+	# Get camera selection
+	selected_cameras = gui.get_camera_selection()
+	if not selected_cameras:
+		print(f"{RED}No cameras selected. Exiting.{NORMAL}")
+		return
+
+	client = CvClient(connectURL, selected_cameras)
 	await client.run()
 
 	# Once the connection is closed, end the event loop

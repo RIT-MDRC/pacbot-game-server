@@ -17,7 +17,7 @@ from cv2 import aruco
 import numpy as np
 
 # Plt
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 # Typing
 from typing import Any
@@ -33,246 +33,306 @@ IntArray = np.ndarray[Any, np.dtype[np.intp]]
 # Bufferless VideoCapture
 class VideoCapture:
 
-	''' Copied from StackOverflow: https://stackoverflow.com/a/54755738 '''
+    ''' Copied from StackOverflow: https://stackoverflow.com/a/54755738 '''
 
-	def __init__(self, name: Any):
-		self.cap = cv2.VideoCapture(name)
-		self.q: queue.Queue[MatLike] = queue.Queue()
-		t = threading.Thread(target=self._reader)
-		t.daemon = True
-		t.start()
+    def __init__(self, name: Any):
+        # Open camera (Auto backend for compatibility)
+        self.cap = cv2.VideoCapture(name)
+        self._stop = threading.Event()
+        
+        # Set properties for MJPG at 640x480 (High FPS, tolerating warnings)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-	# read frames as soon as they are available, keeping only most recent one
-	def _reader(self):
-		while True:
-			ret, frame = self.cap.read()
-			if not ret:
-				break
-			if not self.q.empty():
-				try:
-					self.q.get_nowait()   # discard previous (unprocessed) frame
-				except queue.Empty:
-					pass
-			self.q.put(frame)
+        if not self.cap.isOpened():
+            print(f"ERR: Camera {name} could not be opened.")
 
-	def read(self):
-		return self.q.get()
+        self.q: queue.Queue[MatLike] = queue.Queue()
+        self.t = threading.Thread(target=self._reader)
+        self.t.daemon = True
+        self.t.start()
+
+    def _reader(self):
+        while not self._stop.is_set():
+            ret, frame = self.cap.read()
+            if not ret:
+                self._stop.set()
+                break
+            if not self.q.empty():
+                try:
+                    self.q.get_nowait()   # discard previous (unprocessed) frame
+                except queue.Empty:
+                    pass
+            self.q.put(frame)
+
+    def read(self):
+        try:
+            return self.q.get_nowait()
+        except queue.Empty:
+            return None
+
+    def release(self):
+        self._stop.set()
+        self.t.join()
+        self.cap.release()
 
 class CameraModule:
-	'''
-	Sample implementation of a decision module for computer vision
-	for Pacbot, using asyncio.
-	'''
+    '''
+    Sample implementation of a decision module for computer vision
+    for Pacbot, using asyncio.
+    '''
 
-	def __init__(self, state: ConnectionState) -> None:
-		'''
-		Construct a new decision module object
-		'''
+    def __init__(self, state: ConnectionState) -> None:
+        '''
+        Construct a new decision module object
+        '''
 
-		# Game state object to store the game information
-		self.state = state
+        # Game state object to store the game information
+        self.state = state
 
-		# A dictionary of 4x4 ArUco markers
-		self.dictionary = aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
+        # A dictionary of 4x4 ArUco markers
+        self.dictionary = aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
 
-		# Instantiate a new ArUco detector
-		self.detector = aruco.ArucoDetector(self.dictionary, aruco.DetectorParameters())
+        # Instantiate a new ArUco detector
+        self.detector = aruco.ArucoDetector(self.dictionary, aruco.DetectorParameters())
 
-		# Capture object
-		self.cap = VideoCapture(0)
+        # Capture object
+        self.cap: VideoCapture | None = None
 
-	async def decisionLoop(self) -> None:
-		'''
-		Decision loop for CV
-		'''
+    def setCameraID(self, cameraID: int) -> None:
+        '''
+        Set the camera ID, and open the camera
+        '''
+        self.cap = VideoCapture(cameraID)
 
-		# Receive values as long as we have access
-		while self.state.isConnected():
+        # Latest frame (for display)
+        self.latest_frame: MatLike | None = None
 
-			# Get a frame
-			img = self.capture()
 
-			# If the image is none, continue
-			if img is None:
-				continue
+    async def decisionLoop(self) -> None:
+        '''
+        Decision loop for CV
+        '''
 
-			# Process the frame
-			pacman_row, pacman_col = self.localize(img)
+        # Receive values as long as we have access
+        while self.state.isConnected():
 
-			# If there's a wall where the Pacbot is, quit
-			if self.wallAt(pacman_row, pacman_col):
-				await asyncio.sleep(0)
-				continue
+            # Get a frame
+            img = self.capture()
 
-			# Write back to the server, as a test (move right)
-			self.state.send(pacman_row, pacman_col)
+            # If the image is none, continue
+            if img is None:
+                await asyncio.sleep(0.01) # prevent busy loop
+                continue
 
-			# Free up the event loop
-			await asyncio.sleep(0)
+            # Process the frame
+            pacman_row, pacman_col = self.localize(img, annotate=True)
 
-	def capture(self) -> MatLike | None:
-		'''
-		Capture an image
-		'''
+            # If there's a wall where the Pacbot is, quit
+            if self.wallAt(pacman_row, pacman_col):
+                await asyncio.sleep(0)
+                continue
 
-		img = self.cap.read()
-		if img is None:                                                              # type: ignore
-			print("ERR: NO IMAGE")
-			return None
-		img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-		return img
+            # Write back to the server, as a test (move right)
+            self.state.send(pacman_row, pacman_col)
 
-	def wallAt(self, row: int, col: int) -> bool:
-		'''
-		Helper function to check if a wall is at a given location
-		'''
+            # Free up the event loop
+            await asyncio.sleep(0)
 
-		# Check if the position is off the grid, and return true if so
-		if (row < 0 or row >= 31) or (col < 0 or col >= 28):
-			return True
+    def capture(self) -> MatLike | None:
+        '''
+        Capture an image
+        '''
 
-		# Return whether there is a wall at the location
-		return bool((wallArr[row] >> col) & 1)
+        if self.cap is None:
+            return None
 
-	def localize(self, img: MatLike, warp: bool = False, annotate: bool = False) -> tuple[int, int]:
+        img = self.cap.read()
+        if img is None:                                                              # type: ignore
+            print("ERR: NO IMAGE")
+            return None
+        #img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        return img
 
-		# Detect markers
-		corners, ids, _ = self.detector.detectMarkers(img)
+    def wallAt(self, row: int, col: int) -> bool:
+        '''
+        Helper function to check if a wall is at a given location
+        '''
 
-		if ids is None:                                                              # type: ignore
-			print("ERR: No markers detected...")
-			return 32, 32
+        # Check if the position is off the grid, and return true if so
+        if (row < 0 or row >= 31) or (col < 0 or col >= 28):
+            return True
 
-		print(ids)
+        # Return whether there is a wall at the location
+        return bool((wallArr[row] >> col) & 1)
 
-		# Array of ids with centroids
-		ids_centroids: list[tuple[int, IntArray]] = []
+    def localize(self, img: MatLike, warp: bool = False, annotate: bool = False) -> tuple[int, int]:
 
-		# Variable for whether Pacman was found in frame
-		foundPacman = False
+        # Detect markers
+        corners, ids, _ = self.detector.detectMarkers(img)
 
-		# Loop over the ids
-		for j in range(len(ids)):
+        if ids is None:                                                              # type: ignore
+            print("ERR: No markers detected...")
+            self.latest_frame = img
+            return 32, 32
 
-			# Find this id
-			id = ids[j, 0]
+        # print(ids)
 
-			# If the id is invalid, skip it
-			if id > 6:
-				continue
+        # Array of ids with centroids
+        ids_centroids: list[tuple[int, IntArray]] = []
 
-			# If the id is 0, Pacman has been found
-			if id == 0:
-				foundPacman = True
+        # Variable for whether Pacman was found in frame
+        foundPacman = False
 
-			# Find the coordinates of this centroid
-			centroid = np.array([
-				int(corners[j][0][:, 0].mean()),
-				int(corners[j][0][:, 1].mean())
-			])
+        # Loop over the ids
+        for j in range(len(ids)):
 
-			# Put these together as a pair
-			pair = (id, centroid)
+            # Find this id
+            id = ids[j, 0]
 
-			# Find the coordinates of each centroid
-			ids_centroids.append(pair)
+            # If the id is invalid, skip it
+            if id > 6:
+                continue
 
-		# Assert that Pacman was found
-		if not foundPacman:
-			print("ERR: Pacman not found")
-			return 32, 32
+            # If the id is 0, Pacman has been found
+            if id == 0:
+                foundPacman = True
 
-		# Sort the centroids
-		ids_centroids.sort(key=lambda x: x[0])
+            # Find the coordinates of this centroid
+            centroid = np.array([
+                int(corners[j][0][:, 0].mean()),
+                int(corners[j][0][:, 1].mean())
+            ])
 
-		# Get the sorted ids
-		ids, centroids = list(zip(*ids_centroids))
+            # Put these together as a pair
+            pair = (id, centroid)
 
-		# Determine if the region is the top half or the bottom half
-		topHalf = (ids == (0, 1, 2, 3, 4))
-		bottomHalf = (ids == (0, 3, 4, 5, 6))
+            # Find the coordinates of each centroid
+            ids_centroids.append(pair)
 
-		# Assert that we're either in the top half or bottom half
-		if not (topHalf or bottomHalf):
-			print("ERR: The image is neither the top or bottom half")
-			return 32, 32
+        # Assert that Pacman was found
+        if not foundPacman:
+            # print("ERR: Pacman not found")
+            self.latest_frame = img
+            return 32, 32
 
-		# Dimensions
-		width = 28
-		height = 16 if topHalf else 15
+        # Sort the centroids
+        ids_centroids.sort(key=lambda x: x[0])
 
-		# Put the four corner centroids in an array
-		four_corners = np.array(centroids[1:5]).astype('float32')
+        # Get the sorted ids
+        ids, centroids = list(zip(*ids_centroids))
 
-		# Create an array describing the final locations of those points
-		result = 100 * np.array([
-			[0, 0],
-			[width, 0],
-			[0, height],
-			[width, height]
-		]).astype('float32')
+        # Determine if the region is the top half or the bottom half
+        topHalf = (ids == (0, 1, 2, 3, 4))
+        bottomHalf = (ids == (0, 3, 4, 5, 6))
 
-		# Calculate the perspective matriix
-		matrix = cv2.getPerspectiveTransform(four_corners, result)
+        # Assert that we're either in the top half or bottom half
+        if not (topHalf or bottomHalf):
+            print("ERR: The image is neither the top or bottom half")
+            self.latest_frame = img
+            return 32, 32
 
-		# Warp due to the perspective change
-		if warp:
-			warped = cv2.warpPerspective(img, matrix, (width * 100, height * 100))
-			plt.imshow(warped, cmap='gray')                                          # type: ignore
+        # Dimensions
+        width = 28
+        height = 16 if topHalf else 15
 
-		# Calculate the inverse perspective matrix
-		inverse = np.linalg.inv(matrix)                                              # type: ignore
+        # Put the four corner centroids in an array
+        four_corners = np.array(centroids[1:5]).astype('float32')
 
-		# Offsets
-		offset = 0 if topHalf else 16
+        # Create an array describing the final locations of those points
+        result = 100 * np.array([
+            [0, 0],
+            [width, 0],
+            [0, height],
+            [width, height]
+        ]).astype('float32')
 
-		# Show the 'dots' on the maze
-		if annotate:
-			plt.imshow(img, cmap='gray')                                             # type: ignore
-			for transformed_row in range(0, height):
-				for transformed_col in range(0, width):
-					vector = inverse @ np.array([                                    # type: ignore
-						transformed_col * 100 + 50, transformed_row * 100 + 50, 1
-					])
-					if self.wallAt(transformed_row + offset, transformed_col):
-						plt.plot([vector[0]/vector[2]], [vector[1]/vector[2]], "m.") # type: ignore
-					else:
-						plt.plot([vector[0]/vector[2]], [vector[1]/vector[2]], "c.") # type: ignore
+        # Calculate the perspective matriix
+        matrix = cv2.getPerspectiveTransform(four_corners, result)
 
-		# Figure out where Pacman is
-		vector = matrix @ np.array([centroids[0][0], centroids[0][1], 1])
+        # Warp due to the perspective change
+        if warp:
+            warped = cv2.warpPerspective(img, matrix, (width * 100, height * 100))
+            # plt.imshow(warped, cmap='gray')                                          # type: ignore
+            self.latest_frame = warped
 
-		# Figure out the transformed centroid of Pacman
-		pacman_transformed_rowf = vector[1]/vector[2]/100.0 - 0.5
-		pacman_transformed_colf = vector[0]/vector[2]/100.0 - 0.5
+        # Calculate the inverse perspective matrix
+        inverse = np.linalg.inv(matrix)                                              # type: ignore
 
-		# Round to the nearest transformed row and column
-		pacman_transformed_rowr = round(pacman_transformed_rowf)
-		pacman_transformed_colr = round(pacman_transformed_colf)
-		print(pacman_transformed_rowr + offset, pacman_transformed_colr, end=' -> ')
+        # Offsets
+        offset = 0 if topHalf else 16
 
-		# Loop over a 3x3 square focused on the spot
-		neighbors: list[tuple[float, tuple[int, int]]] = []
-		for transformed_row in range(pacman_transformed_rowr - 1, pacman_transformed_rowr + 2):
-			for transformed_col in range(pacman_transformed_colr - 1, pacman_transformed_colr + 2):
-				if not self.wallAt(transformed_row + offset, transformed_col):
-					distSq = (transformed_row - pacman_transformed_rowf) * \
-								(transformed_row - pacman_transformed_rowf) + \
-							(transformed_col - pacman_transformed_colf) * \
-								(transformed_col - pacman_transformed_colf)
-					neighbors.append((distSq, (transformed_row + offset, transformed_col)))
+        # Show the 'dots' on the maze
+        display_img = img.copy()
 
-		if not len(neighbors):
-			print("ERR: Pacbot was found to be in a wall")
-			return 32, 32
+        if annotate:
+            # plt.imshow(img, cmap='gray')                                             # type: ignore
+            for transformed_row in range(0, height):
+                start_point = None
+                end_point = None
+                for transformed_col in range(0, width):
+                    vector = inverse @ np.array([                                    # type: ignore
+                        transformed_col * 100 + 50, transformed_row * 100 + 50, 1
+                    ])
+                    
+                    point = (int(vector[0]/vector[2]), int(vector[1]/vector[2]))
+                    
+                    # color = (255, 0, 255) if self.wallAt(transformed_row + offset, transformed_col) else (0, 255, 255)
+                    # cv2.circle(display_img, point, 2, color, -1)
 
-		pacman_transformed_row, pacman_transformed_col = min(neighbors)[1]
-		print(pacman_transformed_row, pacman_transformed_col)
-		if annotate:
-			vector = inverse @ np.array([                                            # type: ignore
-				pacman_transformed_col * 100 + 50, (pacman_transformed_row - offset) * 100 + 50, 1
-			])
-			plt.plot([vector[0]/vector[2]], [vector[1]/vector[2]], 'y*')                     # type: ignore
+                    if self.wallAt(transformed_row + offset, transformed_col):
+                        if start_point is None:
+                            start_point = point
+                        end_point = point
+                    else:
+                        if start_point is not None and end_point is not None:
+                            cv2.line(display_img, start_point, end_point, (255, 0, 255), 2)
+                        start_point = None
+                        end_point = None
+                        cv2.circle(display_img, point, 2, (0, 255, 255), -1)
 
-		return pacman_transformed_row, pacman_transformed_col
+        # Figure out where Pacman is
+        vector = matrix @ np.array([centroids[0][0], centroids[0][1], 1])
+
+        # Figure out the transformed centroid of Pacman
+        pacman_transformed_rowf = vector[1]/vector[2]/100.0 - 0.5
+        pacman_transformed_colf = vector[0]/vector[2]/100.0 - 0.5
+
+        # Round to the nearest transformed row and column
+        pacman_transformed_rowr = round(pacman_transformed_rowf)
+        pacman_transformed_colr = round(pacman_transformed_colf)
+        # print(pacman_transformed_rowr + offset, pacman_transformed_colr, end=' -> ')
+
+        # Loop over a 3x3 square focused on the spot
+        neighbors: list[tuple[float, tuple[int, int]]] = []
+        for transformed_row in range(pacman_transformed_rowr - 1, pacman_transformed_rowr + 2):
+            for transformed_col in range(pacman_transformed_colr - 1, pacman_transformed_colr + 2):
+                if not self.wallAt(transformed_row + offset, transformed_col):
+                    distSq = (transformed_row - pacman_transformed_rowf) * \
+                                (transformed_row - pacman_transformed_rowf) + \
+                            (transformed_col - pacman_transformed_colf) * \
+                                (transformed_col - pacman_transformed_colf)
+                    neighbors.append((distSq, (transformed_row + offset, transformed_col)))
+
+        if not len(neighbors):
+            # print("ERR: Pacbot was found to be in a wall")
+            self.latest_frame = display_img
+            return 32, 32
+
+        pacman_transformed_row, pacman_transformed_col = min(neighbors)[1]
+        # print(pacman_transformed_row, pacman_transformed_col)
+        if annotate:
+            vector = inverse @ np.array([                                            # type: ignore
+                pacman_transformed_col * 100 + 50, (pacman_transformed_row - offset) * 100 + 50, 1
+            ])
+            # plt.plot([vector[0]/vector[2]], [vector[1]/vector[2]], 'y*')                     # type: ignore
+            point = (int(vector[0]/vector[2]), int(vector[1]/vector[2]))
+            cv2.drawMarker(display_img, point, (0, 255, 255), markerType=cv2.MARKER_STAR, markerSize=10, thickness=2)
+
+        self.latest_frame = display_img
+        return pacman_transformed_row, pacman_transformed_col
+
 

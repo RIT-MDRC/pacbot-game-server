@@ -12,6 +12,9 @@ class ConnectionState:
 		Construct a new game state object
 		'''
 
+		# Is the client connected to the server?
+		self._connected: bool = False
+
 		# Buffer of messages to write back to the server
 		self.writeServerBuf: deque[bytes] = deque[bytes](maxlen=64)
 
