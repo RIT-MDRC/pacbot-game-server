@@ -175,7 +175,6 @@ class CameraModule:
         corners, ids, _ = self.detector.detectMarkers(img)
 
         if ids is None:                                                              # type: ignore
-            print("ERR: No markers detected...")
             self.latest_frame = img
             return 32, 32
 
