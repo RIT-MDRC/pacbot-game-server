@@ -18,9 +18,13 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    defaults:
+        run:
+            working-directory: web_client
+
     steps:
       - uses: actions/checkout@v4
-
+      
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -34,7 +38,7 @@ jobs:
           cache: 'pnpm'
 
       - name: Install dependencies
-        run: cd web_client && pnpm install
+        run: pnpm install
 
       - name: Build web client
         run: pnpm build
