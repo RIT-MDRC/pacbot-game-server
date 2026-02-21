@@ -8,6 +8,7 @@
     "[::1]",
     "localhost"
   ],
+  "AllIPsTrusted": false,
 
   "GameFPS": 24,
   "NumActiveGhosts": 4
