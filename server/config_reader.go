@@ -14,6 +14,7 @@ type Configuration struct {
 	GameFPS          int32
 	NumActiveGhosts  uint8
 	TrustedClientIPs []string
+	AllIPsTrusted    bool
 }
 
 // Read from the config.json file in the base directory

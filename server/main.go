@@ -22,7 +22,7 @@ func main() {
 
 	// Use this configuration info to set up server subunits
 	webserver.ConfigOneClientPerIP(conf.OneClientPerIP)
-	webserver.ConfigTrustedClientIPs(conf.TrustedClientIPs)
+	webserver.ConfigTrustedClientIPs(conf.TrustedClientIPs, conf.AllIPsTrusted)
 
 	// Make channels for communication between web broker and game engine
 	webBroadcastCh := make(chan []byte, 100)

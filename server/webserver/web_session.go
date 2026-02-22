@@ -15,13 +15,17 @@ var oneClientPerIP bool = false
 // Keep track of trusted client IPs in a set (empty-valued map)
 var trustedClientIPs = make(map[string](struct{}))
 
+// Keep track of whether all IPs are trusted [for development purposes]
+var allIPsTrusted = false
+
 // Set the one client per IP restriction based on a configuration
 func ConfigOneClientPerIP(_oneClientPerIP bool) {
 	oneClientPerIP = _oneClientPerIP
 }
 
-// Set the one client per IP restriction based on a configuration
-func ConfigTrustedClientIPs(_trustedClientIPs []string) {
+// Set the trusted IP restriction based on a configuration
+func ConfigTrustedClientIPs(_trustedClientIPs []string, allTrusted bool) {
+	allIPsTrusted = allTrusted
 	for _, ip := range _trustedClientIPs {
 		trustedClientIPs[ip] = struct{}{}
 	}
@@ -45,6 +49,18 @@ func getIP(conn *websocket.Conn) string {
 	addr := conn.RemoteAddr().String()
 	sepIdx := strings.LastIndex(addr, ":")
 	return addr[:sepIdx]
+}
+
+/*
+Get whether or not a certain IP is trusted depending on the configuration.
+*/
+func isTrusted(ip string) bool {
+	if allIPsTrusted {
+		return true
+	} else {
+		_, trusted := trustedClientIPs[ip]
+		return trusted
+	}
 }
 
 // Web session object, for keeping track of individual websocket sessions
@@ -77,11 +93,7 @@ func (ws *webSession) register() {
 	ipSessionMap[ip] = ws
 	muISM.Unlock()
 
-	/*
-		Determine if we trust this new connection, by checking against configured
-		trusted connections
-	*/
-	_, trusted := trustedClientIPs[ip]
+	trusted := isTrusted(ip)
 	if !trusted {
 		ws.readEn = false
 	}
@@ -106,7 +118,7 @@ func (ws *webSession) register() {
 func (ws *webSession) unregister() {
 	// Record the IP address of the disconnecting client
 	ip := getIP(ws.conn)
-	_, trusted := trustedClientIPs[ip]
+	trusted := isTrusted(ip)
 
 	/*
 		Lock the mutex so that other channels will not read the open web
