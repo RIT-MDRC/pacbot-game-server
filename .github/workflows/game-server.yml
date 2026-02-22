@@ -1,0 +1,29 @@
+name: Build Game Server
+
+on:
+  push:
+    paths: ["server/**", ".github/workflows/game-server.yml"]
+    branches: [ "main" ]
+  pull_request:
+    paths: ["server/**", ".github/workflows/game-server.yml"]
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: server/go.mod
+
+      - name: Build Server
+        run: cd server && go build

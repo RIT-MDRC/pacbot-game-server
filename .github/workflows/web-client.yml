@@ -1,0 +1,45 @@
+name: Build Web Client
+
+on:
+  push:
+    paths: ["server/**", ".github/workflows/web-client.yml"]
+    branches: [ "main" ]
+  pull_request:
+    paths: ["server/**", ".github/workflows/web-client.yml"]
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    defaults:
+        run:
+            working-directory: web_client
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+            version: latest
+            run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+          cache-dependency-path: web_client/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build web client
+        run: pnpm build
