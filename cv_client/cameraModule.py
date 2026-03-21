@@ -30,22 +30,28 @@ import queue
 MatLike = cv2.typing.MatLike
 IntArray = np.ndarray[Any, np.dtype[np.intp]]
 
+
 # Bufferless VideoCapture
 class VideoCapture:
-
-    ''' Copied from StackOverflow: https://stackoverflow.com/a/54755738 '''
+    """Copied from StackOverflow: https://stackoverflow.com/a/54755738"""
 
     def __init__(self, name: Any):
         # Open camera (Auto backend for compatibility)
         self.cap = cv2.VideoCapture(name)
         self._stop = threading.Event()
-        
-        # Set properties for MJPG at 640x480 (High FPS, tolerating warnings)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1080)
+
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc("M", "J", "P", "G"))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self.cap.set(cv2.CAP_PROP_FPS, 30)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        print(
+            "Got size: ({}, {})".format(
+                self.cap.get(cv2.CAP_PROP_FRAME_WIDTH),
+                self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
+            )
+        )
 
         if not self.cap.isOpened():
             print(f"ERR: Camera {name} could not be opened.")
@@ -63,7 +69,7 @@ class VideoCapture:
                 break
             if not self.q.empty():
                 try:
-                    self.q.get_nowait()   # discard previous (unprocessed) frame
+                    self.q.get_nowait()  # discard previous (unprocessed) frame
                 except queue.Empty:
                     pass
             self.q.put(frame)
@@ -79,16 +85,17 @@ class VideoCapture:
         self.t.join()
         self.cap.release()
 
+
 class CameraModule:
-    '''
+    """
     Sample implementation of a decision module for computer vision
     for Pacbot, using asyncio.
-    '''
+    """
 
     def __init__(self, state: ConnectionState) -> None:
-        '''
+        """
         Construct a new decision module object
-        '''
+        """
 
         # Game state object to store the game information
         self.state = state
@@ -103,29 +110,27 @@ class CameraModule:
         self.cap: VideoCapture | None = None
 
     def setCameraID(self, cameraID: int) -> None:
-        '''
+        """
         Set the camera ID, and open the camera
-        '''
+        """
         self.cap = VideoCapture(cameraID)
 
         # Latest frame (for display)
         self.latest_frame: MatLike | None = None
 
-
     async def decisionLoop(self) -> None:
-        '''
+        """
         Decision loop for CV
-        '''
+        """
 
         # Receive values as long as we have access
         while self.state.isConnected():
-
             # Get a frame
             img = self.capture()
 
             # If the image is none, continue
             if img is None:
-                await asyncio.sleep(0.01) # prevent busy loop
+                await asyncio.sleep(0.01)  # prevent busy loop
                 continue
 
             # Process the frame
@@ -143,24 +148,27 @@ class CameraModule:
             await asyncio.sleep(0)
 
     def capture(self) -> MatLike | None:
-        '''
+        """
         Capture an image
-        '''
+        """
 
         if self.cap is None:
             return None
 
+        self.cap.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
         img = self.cap.read()
-        if img is None:                                                              # type: ignore
-            print("ERR: NO IMAGE")
+        if img is None:  # type: ignore
+            # print("ERR: NO IMAGE")
             return None
-        #img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         return img
 
     def wallAt(self, row: int, col: int) -> bool:
-        '''
+        """
         Helper function to check if a wall is at a given location
-        '''
+        """
 
         # Check if the position is off the grid, and return true if so
         if (row < 0 or row >= 31) or (col < 0 or col >= 28):
@@ -169,12 +177,13 @@ class CameraModule:
         # Return whether there is a wall at the location
         return bool((wallArr[row] >> col) & 1)
 
-    def localize(self, img: MatLike, warp: bool = False, annotate: bool = False) -> tuple[int, int]:
-
+    def localize(
+        self, img: MatLike, warp: bool = False, annotate: bool = False
+    ) -> tuple[int, int]:
         # Detect markers
         corners, ids, _ = self.detector.detectMarkers(img)
 
-        if ids is None:                                                              # type: ignore
+        if ids is None:  # type: ignore
             self.latest_frame = img
             return 32, 32
 
@@ -188,7 +197,6 @@ class CameraModule:
 
         # Loop over the ids
         for j in range(len(ids)):
-
             # Find this id
             id = ids[j, 0]
 
@@ -201,10 +209,9 @@ class CameraModule:
                 pacman_id_found = True
 
             # Find the coordinates of this centroid
-            centroid = np.array([
-                int(corners[j][0][:, 0].mean()),
-                int(corners[j][0][:, 1].mean())
-            ])
+            centroid = np.array(
+                [int(corners[j][0][:, 0].mean()), int(corners[j][0][:, 1].mean())]
+            )
 
             # Put these together as a pair
             pair = (id, centroid)
@@ -223,7 +230,9 @@ class CameraModule:
         ids_centroids.sort(key=lambda x: x[0])
 
         # Get the sorted ids and centroids (excluding Pacman)
-        corner_ids, corner_centroids = list(zip(*ids_centroids)) if ids_centroids else ((), ())
+        corner_ids, corner_centroids = (
+            list(zip(*ids_centroids)) if ids_centroids else ((), ())
+        )
 
         # Initialize pacman_row and pacman_col to default "not found" values
         pacman_row, pacman_col = 32, 32
@@ -252,7 +261,7 @@ class CameraModule:
             is_topHalf = True
         elif bottom_matches >= 4 and bottom_matches > top_matches:
             is_bottomHalf = True
-        
+
         # Initialize matrix and inverse to None
         matrix = None
         inverse = None
@@ -274,42 +283,59 @@ class CameraModule:
                 offset = 16
 
             # Filter for only the *detected* expected corners for this half
-            detected_corners_for_half_map = {id: corner_marker_map[id] for id in expected_corner_ids_for_half if id in corner_marker_map}
-            
+            detected_corners_for_half_map = {
+                id: corner_marker_map[id]
+                for id in expected_corner_ids_for_half
+                if id in corner_marker_map
+            }
+
             # Sort detected corners by their IDs to maintain a consistent order for perspective transform
             sorted_detected_corners = sorted(detected_corners_for_half_map.items())
 
             # We need exactly 4 points to calculate a perspective transform
             if len(sorted_detected_corners) == 4:
                 # Extract centroids in the sorted order
-                four_corners_src = np.array([item[1] for item in sorted_detected_corners]).astype('float32')
+                four_corners_src = np.array(
+                    [item[1] for item in sorted_detected_corners]
+                ).astype("float32")
 
                 # Create an array describing the final locations of those points
-                result = 100 * np.array([
-                    [0, 0],  # Top-left
-                    [width, 0],  # Top-right
-                    [0, height],  # Bottom-left
-                    [width, height]  # Bottom-right
-                ]).astype('float32')
+                result = 100 * np.array(
+                    [
+                        [0, 0],  # Top-left
+                        [width, 0],  # Top-right
+                        [0, height],  # Bottom-left
+                        [width, height],  # Bottom-right
+                    ]
+                ).astype("float32")
 
                 # Calculate the perspective matrix
                 matrix = cv2.getPerspectiveTransform(four_corners_src, result)
-                inverse = np.linalg.inv(matrix) # type: ignore
+                inverse = np.linalg.inv(matrix)  # type: ignore
 
                 # Warp due to the perspective change
                 if warp:
-                    warped = cv2.warpPerspective(img, matrix, (width * 100, height * 100))
+                    warped = cv2.warpPerspective(
+                        img, matrix, (width * 100, height * 100)
+                    )
                     self.latest_frame = warped
 
-
         display_img = img.copy()
-        
+
         if annotate:
             # Draw all detected marker centroids
             for _id, centroid in ids_centroids:
-                cv2.circle(display_img, (centroid[0], centroid[1]), 5, (0, 255, 0), -1) # Green for corner markers
+                cv2.circle(
+                    display_img, (centroid[0], centroid[1]), 5, (0, 255, 0), -1
+                )  # Green for corner markers
             if pacman_centroid is not None:
-                cv2.circle(display_img, (pacman_centroid[0], pacman_centroid[1]), 5, (0, 255, 255), -1) # Yellow for Pacman
+                cv2.circle(
+                    display_img,
+                    (pacman_centroid[0], pacman_centroid[1]),
+                    5,
+                    (0, 255, 255),
+                    -1,
+                )  # Yellow for Pacman
 
         if matrix is not None and inverse is not None:
             if annotate:
@@ -318,12 +344,16 @@ class CameraModule:
                     start_point = None
                     end_point = None
                     for transformed_col in range(0, width):
-                        vector = inverse @ np.array([                                    # type: ignore
-                            transformed_col * 100 + 50, transformed_row * 100 + 50, 1
-                        ])
-                        
-                        point = (int(vector[0]/vector[2]), int(vector[1]/vector[2]))
-                        
+                        vector = inverse @ np.array(
+                            [  # type: ignore
+                                transformed_col * 100 + 50,
+                                transformed_row * 100 + 50,
+                                1,
+                            ]
+                        )
+
+                        point = (int(vector[0] / vector[2]), int(vector[1] / vector[2]))
+
                         # color = (255, 0, 255) if self.wallAt(transformed_row + offset, transformed_col) else (0, 255, 255)
                         # cv2.circle(display_img, point, 2, color, -1)
 
@@ -333,7 +363,13 @@ class CameraModule:
                             end_point = point
                         else:
                             if start_point is not None and end_point is not None:
-                                cv2.line(display_img, start_point, end_point, (255, 0, 255), 2)
+                                cv2.line(
+                                    display_img,
+                                    start_point,
+                                    end_point,
+                                    (255, 0, 255),
+                                    2,
+                                )
                             start_point = None
                             end_point = None
                             cv2.circle(display_img, point, 2, (0, 255, 255), -1)
@@ -343,8 +379,8 @@ class CameraModule:
                 vector = matrix @ np.array([pacman_centroid[0], pacman_centroid[1], 1])
 
                 # Figure out the transformed centroid of Pacman
-                pacman_transformed_rowf = vector[1]/vector[2]/100.0 - 0.5
-                pacman_transformed_colf = vector[0]/vector[2]/100.0 - 0.5
+                pacman_transformed_rowf = vector[1] / vector[2] / 100.0 - 0.5
+                pacman_transformed_colf = vector[0] / vector[2] / 100.0 - 0.5
 
                 # Round to the nearest transformed row and column
                 pacman_transformed_rowr = round(pacman_transformed_rowf)
@@ -353,14 +389,21 @@ class CameraModule:
 
                 # Loop over a 3x3 square focused on the spot
                 neighbors: list[tuple[float, tuple[int, int]]] = []
-                for transformed_row in range(pacman_transformed_rowr - 1, pacman_transformed_rowr + 2):
-                    for transformed_col in range(pacman_transformed_colr - 1, pacman_transformed_colr + 2):
+                for transformed_row in range(
+                    pacman_transformed_rowr - 1, pacman_transformed_rowr + 2
+                ):
+                    for transformed_col in range(
+                        pacman_transformed_colr - 1, pacman_transformed_colr + 2
+                    ):
                         if not self.wallAt(transformed_row + offset, transformed_col):
-                            distSq = (transformed_row - pacman_transformed_rowf) * \
-                                        (transformed_row - pacman_transformed_rowf) + \
-                                    (transformed_col - pacman_transformed_colf) * \
-                                        (transformed_col - pacman_transformed_colf)
-                            neighbors.append((distSq, (transformed_row + offset, transformed_col)))
+                            distSq = (transformed_row - pacman_transformed_rowf) * (
+                                transformed_row - pacman_transformed_rowf
+                            ) + (transformed_col - pacman_transformed_colf) * (
+                                transformed_col - pacman_transformed_colf
+                            )
+                            neighbors.append(
+                                (distSq, (transformed_row + offset, transformed_col))
+                            )
 
                 if not len(neighbors):
                     # print("ERR: Pacbot was found to be in a wall")
@@ -370,14 +413,23 @@ class CameraModule:
                 pacman_transformed_row, pacman_transformed_col = min(neighbors)[1]
                 # print(pacman_transformed_row, pacman_transformed_col)
                 if annotate:
-                    vector = inverse @ np.array([                                            # type: ignore
-                        pacman_transformed_col * 100 + 50, (pacman_transformed_row - offset) * 100 + 50, 1
-                    ])
+                    vector = inverse @ np.array(
+                        [  # type: ignore
+                            pacman_transformed_col * 100 + 50,
+                            (pacman_transformed_row - offset) * 100 + 50,
+                            1,
+                        ]
+                    )
                     # plt.plot([vector[0]/vector[2]], [vector[1]/vector[2]], 'y*')                     # type: ignore
-                    point = (int(vector[0]/vector[2]), int(vector[1]/vector[2]))
-                    cv2.drawMarker(display_img, point, (0, 255, 255), markerType=cv2.MARKER_STAR, markerSize=10, thickness=2)
+                    point = (int(vector[0] / vector[2]), int(vector[1] / vector[2]))
+                    cv2.drawMarker(
+                        display_img,
+                        point,
+                        (0, 255, 255),
+                        markerType=cv2.MARKER_STAR,
+                        markerSize=10,
+                        thickness=2,
+                    )
 
         self.latest_frame = display_img
         return pacman_row, pacman_col
-
-
