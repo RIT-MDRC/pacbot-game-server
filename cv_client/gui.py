@@ -8,9 +8,13 @@ import time
 def get_available_cameras(max_checks=10):
     available_cameras = []
     for i in range(max_checks):
-        cap = cv2.VideoCapture(i)
+        # Open with CAP_V4L2 for stability on Linux
+        cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
         if cap.isOpened():
-            available_cameras.append(i)
+            # Attempt a read to ensure it's a real camera (not a metadata node)
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                available_cameras.append(i)
             cap.release()
     return available_cameras
 
@@ -75,7 +79,7 @@ def get_camera_selection():
                 if caps[cap_key] is not None:
                     caps[cap_key].release()
 
-                caps[cap_key] = cv2.VideoCapture(idx)
+                caps[cap_key] = cv2.VideoCapture(idx, cv2.CAP_V4L2)
                 if caps[cap_key].isOpened():
                     current_indices[cap_key] = idx
                 else:

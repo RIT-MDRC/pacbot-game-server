@@ -36,8 +36,8 @@ class VideoCapture:
     """Copied from StackOverflow: https://stackoverflow.com/a/54755738"""
 
     def __init__(self, name: Any):
-        # Open camera (Auto backend for compatibility)
-        self.cap = cv2.VideoCapture(name)
+        # Open camera (CAP_V4L2 for stability on Linux)
+        self.cap = cv2.VideoCapture(name, cv2.CAP_V4L2)
         self._stop = threading.Event()
 
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc("M", "J", "P", "G"))
@@ -47,7 +47,8 @@ class VideoCapture:
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         print(
-            "Got size: ({}, {})".format(
+            "Camera {} got size: ({}, {})".format(
+                name,
                 self.cap.get(cv2.CAP_PROP_FRAME_WIDTH),
                 self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
             )
@@ -154,9 +155,6 @@ class CameraModule:
 
         if self.cap is None:
             return None
-
-        self.cap.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.cap.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
         img = self.cap.read()
         if img is None:  # type: ignore
