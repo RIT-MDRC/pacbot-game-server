@@ -114,6 +114,7 @@ func (s *TcpServer) tcpReadLoop(conn net.Conn) {
 		// Read new messages
 		buf := make([]byte, 2048)
 		n, err := conn.Read(buf)
+		log.Printf("Received a packet from the client at %s", conn.RemoteAddr().String())
 		if err != nil {
 
 			// Handle EOF (connection closure)

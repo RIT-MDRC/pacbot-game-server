@@ -197,6 +197,7 @@ func (ws *webSession) readLoop() {
 	for {
 		// Read a message (discard the type since we don't need it)
 		_, msg, err := ws.conn.ReadMessage()
+		log.Printf("Received a packet from the client at %s", ws.conn.RemoteAddr().String())
 		if err != nil {
 
 			// Types of errors which we intentionally catch and return from
